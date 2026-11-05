@@ -448,7 +448,8 @@ static void whistle(void)
     if ((whistle_pid = fork()) != 0) return;
     setpgid(0, 0);
     signal(SIGINT, SIG_IGN); signal(SIGQUIT, SIG_IGN); signal(SIGTSTP, SIG_IGN);
-    signal(SIGHUP, SIG_DFL); signal(SIGTERM, SIG_DFL);
+    signal(SIGHUP, SIG_DFL); signal(SIGTERM, SIG_DFL); signal(SIGPIPE, SIG_DFL);
+    setenv("LC_ALL", "C", 1);  /* pactl's "yes"/"no" and "NN%" output is translated otherwise */
 
     /* The lock keeps overlapping runs from saving 100% as the "original" volume. */
     char path[4096];
@@ -594,12 +595,17 @@ static void add_label_car(const char *line)
         }
         if (*p < 0x20 || *p == 0x7f) { p++; continue; }  /* other control characters */
         if (*p < 0x80) { text[n++] = *p++; continue; }
-        int extra = *p >= 0xf0 ? 3 : *p >= 0xe0 ? 2 : *p >= 0xc0 ? 1 : -1;  /* UTF-8 */
+        int extra = *p >= 0xf8 ? -1 : *p >= 0xf0 ? 3 : *p >= 0xe0 ? 2 : *p >= 0xc0 ? 1 : -1;  /* UTF-8 */
         uint32_t c = extra == 3 ? *p & 7 : extra == 2 ? *p & 15 : *p & 31;
         for (i = 1; extra > 0 && i <= extra; i++) {
             if ((p[i] & 0xc0) != 0x80) { extra = -1; break; }
             c = c << 6 | (p[i] & 63);
         }
+        /* Strict decoding: no overlong forms (\xc0\x9b would be an ESC that slips past the control
+         * character check above), no surrogates, nothing past U+10FFFF. */
+        if (extra > 0 && (c < (extra == 1 ? 0x80u : extra == 2 ? 0x800u : 0x10000u) || c > 0x10ffff ||
+                          (c >= 0xd800 && c <= 0xdfff)))
+            extra = -1;
         if (extra < 0) { text[n++] = '?'; p++; continue; }
         p += extra + 1;
         if (c >= 0x80 && c < 0xa0) continue;  /* C1 control characters */
@@ -878,6 +884,7 @@ static void flush_out(void)
     while (done < outlen) {
         ssize_t n = write(1, out + done, outlen - done);
         if (n < 0 && errno == EINTR) continue;
+        if (n < 0 && errno == EPIPE) quit_code = 141;  /* the reader is gone: stop, like SIGPIPE would */
         if (n <= 0) break;
         done += n;
     }
@@ -1100,6 +1107,7 @@ int main(int argc, char **argv)
     /* Like the original, ignore Ctrl+C unless -e; also ignore Ctrl+Z (SIGTSTP) and Ctrl+\ (SIGQUIT).
      * SIGKILL and SIGSTOP can't be caught or ignored by any program, so kill -9 and kill -STOP
      * still work. */
+    signal(SIGPIPE, SIG_IGN);  /* a closed pipe must not skip the cleanup that restores the terminal */
     if (INTR) handle(SIGINT, on_quit);
     else { signal(SIGINT, SIG_IGN); signal(SIGTSTP, SIG_IGN); signal(SIGQUIT, SIG_IGN); }
 
