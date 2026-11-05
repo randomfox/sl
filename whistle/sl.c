@@ -9,7 +9,7 @@
  */
 
 /*
- * sl with a steam whistle, in C: plays a whistle at full system volume, and when run without
+ * sl with a steam whistle, in C (version 1.1.0): plays a whistle at full system volume, and when run without
  * options, three times in four adds random options from -a, -l, -F, -G, -i, -3, -c, -b and -L,
  * stacking them, each at most once, at most one train, and only one of -F and -L (each draw has a
  * one-in-four chance of stopping). -f can only come first.
